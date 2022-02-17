@@ -91,7 +91,7 @@ handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_info({'DOWN', _Mon, Pid, _Reason}, State) ->
-    handle_remote_down(Pid, State);
+    handle_down(Pid, State);
 handle_info({insert_from_remote_node, Mon, Pid, Rec}, State = #{tab := Tab}) ->
     ets:insert_new(Tab, Rec),
     Pid ! {inserted, Mon},
@@ -165,9 +165,9 @@ handle_remote_just_add_node_to_schema(ServerPid, OtherNodes, State = #{tab := Ta
     end.
 
 start_proxies_for([RemotePid|OtherPids]) ->
-    erlang:monitor(process, RemotePid),
     RemoteNode = node(RemotePid),
     {ok, ProxyPid} = kiss_proxy:start(RemotePid),
+    erlang:monitor(process, ProxyPid),
     [{RemoteNode, RemotePid, ProxyPid}|start_proxies_for(OtherPids)];
 start_proxies_for([]) ->
     [].
@@ -182,8 +182,9 @@ insert_many(Tab, [Rec|Recs]) ->
 insert_many(_Tab, []) ->
     ok.
 
-handle_remote_down(Pid, State = #{tab := Tab, other_nodes := Nodes}) ->
-    Nodes2 = lists:keydelete(Pid, 2, Nodes),
+handle_down(Pid, State = #{tab := Tab, other_nodes := Nodes}) ->
+    %% Down from a proxy
+    Nodes2 = lists:keydelete(Pid, 3, Nodes),
     update_pt(Tab, Nodes2),
     {noreply, State#{other_nodes => Nodes2}}.
 
