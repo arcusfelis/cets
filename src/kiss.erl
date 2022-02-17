@@ -6,7 +6,7 @@
 
 %% We don't use monitors to avoid round-trips (that's why we don't use calls neither)
 -module(kiss).
--export([start/2, dump/1, insert/2, join/2, other_nodes/1]).
+-export([start/2, stop/1, dump/1, insert/2, join/2, other_nodes/1]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
@@ -14,7 +14,7 @@
 -behaviour(gen_server).
 
 %% Table and server has the same name
-start(Tab, Opts) when is_atom(Tab) ->
+start(Tab, _Opts) when is_atom(Tab) ->
     gen_server:start({local, Tab}, ?MODULE, [Tab], []).
 
 stop(Tab) ->
@@ -32,6 +32,8 @@ remote_add_node_to_schema(RemotePid, ServerPid, OtherNodes) ->
 remote_just_add_node_to_schema(RemotePid, ServerPid, OtherNodes) ->
     gen_server:call(RemotePid, {remote_just_add_node_to_schema, ServerPid, OtherNodes}, infinity).
 
+send_dump_to_remote_node(_RemotePid, _FromPid, []) ->
+    skipped;
 send_dump_to_remote_node(RemotePid, FromPid, OurDump) ->
     gen_server:call(RemotePid, {send_dump_to_remote_node, FromPid, OurDump}, infinity).
 
@@ -44,7 +46,7 @@ insert(Tab, Rec) ->
     Monitors = insert_to_remote_nodes(Nodes, Rec),
     wait_for_inserted(Monitors).
 
-insert_to_remote_nodes([{RemoteNode, RemotePid, ProxyPid}|Nodes], Rec) ->
+insert_to_remote_nodes([{_RemoteNode, RemotePid, ProxyPid}|Nodes], Rec) ->
     Mon = erlang:monitor(process, ProxyPid),
     erlang:send(RemotePid, {insert_from_remote_node, Mon, self(), Rec}, [noconnect]),
     [Mon|insert_to_remote_nodes(Nodes, Rec)];
@@ -71,7 +73,7 @@ init([Tab]) ->
     update_pt(Tab, []),
     {ok, #{tab => Tab, other_nodes => []}}.
 
-handle_call({join, RemoteNode}, From, State) ->
+handle_call({join, RemoteNode}, _From, State) ->
     handle_join(RemoteNode, State);
 handle_call({remote_add_node_to_schema, ServerPid, OtherNodes}, _From, State) ->
     handle_remote_add_node_to_schema(ServerPid, OtherNodes, State);
@@ -81,11 +83,11 @@ handle_call({send_dump_to_remote_node, FromPid, Dump}, _From, State) ->
     handle_send_dump_to_remote_node(FromPid, Dump, State);
 handle_call(get_other_nodes, _From, State = #{other_nodes := Nodes}) ->
     {reply, Nodes, State};
-handle_call({insert, Rec}, From, State = #{tab := Tab}) ->
+handle_call({insert, Rec}, _From, State = #{tab := Tab}) ->
     ets:insert_new(Tab, Rec),
     {reply, ok, State}.
 
-handle_cast(Msg, State) ->
+handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_info({'DOWN', _Mon, Pid, _Reason}, State) ->
