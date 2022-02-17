@@ -6,7 +6,7 @@
 
 %% We don't use monitors to avoid round-trips (that's why we don't use calls neither)
 -module(kiss).
--export([start/2, dump/1, insert/2, join/2]).
+-export([start/2, dump/1, insert/2, join/2, other_nodes/1]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
@@ -28,6 +28,9 @@ join(RemoteNode, Tab) when RemoteNode =/= node() ->
 
 remote_add_node_to_schema(RemotePid, ServerPid, OtherNodes) ->
     gen_server:call(RemotePid, {remote_add_node_to_schema, ServerPid, OtherNodes}, infinity).
+
+remote_just_add_node_to_schema(RemotePid, ServerPid, OtherNodes) ->
+    gen_server:call(RemotePid, {remote_just_add_node_to_schema, ServerPid, OtherNodes}, infinity).
 
 send_dump_to_remote_node(RemotePid, FromPid, OurDump) ->
     gen_server:call(RemotePid, {send_dump_to_remote_node, FromPid, OurDump}, infinity).
@@ -72,6 +75,8 @@ handle_call({join, RemoteNode}, From, State) ->
     handle_join(RemoteNode, State);
 handle_call({remote_add_node_to_schema, ServerPid, OtherNodes}, _From, State) ->
     handle_remote_add_node_to_schema(ServerPid, OtherNodes, State);
+handle_call({remote_just_add_node_to_schema, ServerPid, OtherNodes}, _From, State) ->
+    handle_remote_just_add_node_to_schema(ServerPid, OtherNodes, State);
 handle_call({send_dump_to_remote_node, FromPid, Dump}, _From, State) ->
     handle_send_dump_to_remote_node(FromPid, Dump, State);
 handle_call(get_other_nodes, _From, State = #{other_nodes := Nodes}) ->
@@ -111,13 +116,19 @@ handle_join(RemoteNode, State = #{tab := Tab, other_nodes := Nodes}) ->
                 true ->
                     case remote_add_node_to_schema(RemotePid, self(), Nodes) of
                         {ok, Dump, OtherNodes} ->
-                            Mon = erlang:monitor(process, RemotePid),
+                            KnownPids = [Pid || {_, Pid, _} <- Nodes],
                             OtherPids = [Pid || {_, Pid, _} <- OtherNodes],
+                            %% Let all nodes to know each other
+                            [remote_just_add_node_to_schema(Pid, self(), Nodes) || Pid <- OtherPids],
+                            [remote_just_add_node_to_schema(Pid, self(), OtherNodes) || Pid <- KnownPids],
                             Nodes2 = start_proxies_for([RemotePid|OtherPids]) ++ Nodes,
                             %% Ask our node to replicate data there before applying the dump
                             update_pt(Tab, Nodes2),
                             OurDump = dump(Tab),
-                            send_dump_to_remote_node(RemotePid, self(), OurDump),
+                            %% Send to all nodes from that partition
+                            [send_dump_to_remote_node(Pid, self(), OurDump) || Pid <- [RemotePid|OtherPids]],
+                            %% Apply to our nodes
+                            [send_dump_to_remote_node(Pid, self(), Dump) || Pid <- KnownPids],
                             insert_many(Tab, Dump),
                             %% Add ourself into remote schema
                             %% Add remote nodes into our schema
@@ -130,21 +141,29 @@ handle_join(RemoteNode, State = #{tab := Tab, other_nodes := Nodes}) ->
             end
     end.
 
-handle_remote_add_node_to_schema(ServerPid, OtherNodes, State = #{tab := Tab, other_nodes := Nodes}) ->
+handle_remote_add_node_to_schema(ServerPid, OtherNodes, State = #{tab := Tab}) ->
+    case handle_remote_just_add_node_to_schema(ServerPid, OtherNodes, State) of
+        {reply, {ok, Nodes}, State2} ->
+            {reply, {ok, dump(Tab), Nodes}, State2};
+        Other ->
+            Other
+    end.
+
+handle_remote_just_add_node_to_schema(ServerPid, OtherNodes, State = #{tab := Tab, other_nodes := Nodes}) ->
     RemoteNode = node(ServerPid),
     case lists:member(RemoteNode, Nodes) of
         true ->
             %% Already added (should not happen)
             {reply, {error, already_added}, State};
         false ->
-            Mon = erlang:monitor(process, ServerPid),
             OtherPids = [Pid || {_, Pid, _} <- OtherNodes],
             Nodes2 = start_proxies_for([ServerPid|OtherPids]) ++ Nodes,
             update_pt(Tab, Nodes2),
-            {reply, {ok, dump(Tab), Nodes}, State#{other_nodes => Nodes2}}
+            {reply, {ok, Nodes}, State#{other_nodes => Nodes2}}
     end.
 
 start_proxies_for([RemotePid|OtherPids]) ->
+    erlang:monitor(process, RemotePid),
     RemoteNode = node(RemotePid),
     {ok, ProxyPid} = kiss_proxy:start(RemotePid),
     [{RemoteNode, RemotePid, ProxyPid}|start_proxies_for(OtherPids)];

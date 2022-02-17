@@ -44,6 +44,13 @@ ets_tests(Config) ->
 %   [insert(Node1, Tab, {X}) || X <- lists:seq(1, 100000)],
     ct:pal("n1 ~p~n", [dump(Node1, Tab)]),
     ct:pal("n2 ~p~n", [dump(Node2, Tab)]),
+    ct:pal("n3 ~p~n", [dump(Node3, Tab)]),
+    ct:pal("n4 ~p~n", [dump(Node4, Tab)]),
+
+    ct:pal("other_nodes ~p~n", [other_nodes(Node1, Tab)]),
+    ct:pal("other_nodes ~p~n", [other_nodes(Node2, Tab)]),
+    ct:pal("other_nodes ~p~n", [other_nodes(Node3, Tab)]),
+    ct:pal("other_nodes ~p~n", [other_nodes(Node4, Tab)]),
     error(oops),
     ok.
 
@@ -55,6 +62,9 @@ insert(Node, Tab, Rec) ->
 
 dump(Node, Tab) ->
     rpc(Node, kiss, dump, [Tab]).
+
+other_nodes(Node, Tab) ->
+    rpc(Node, kiss, other_nodes, [Tab]).
 
 join(Node1, Node2, Tab) ->
     rpc(Node1, kiss, join, [Node2, Tab]).
