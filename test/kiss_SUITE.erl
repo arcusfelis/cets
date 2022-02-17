@@ -34,24 +34,22 @@ ets_tests(Config) ->
     insert(Node2, Tab, {b}),
     insert(Node3, Tab, {c}),
     insert(Node4, Tab, {d}),
-    ct:pal("n1 ~p~n", [dump(Node1, Tab)]),
-    ct:pal("n2 ~p~n", [dump(Node2, Tab)]),
+    [{a},{c}] = dump(Node1, Tab),
+    [{b},{d}] = dump(Node2, Tab),
     join(Node1, Node2, Tab),
-    ct:pal("n1 ~p~n", [dump(Node1, Tab)]),
-    ct:pal("n2 ~p~n", [dump(Node2, Tab)]),
+    [{a},{b},{c},{d}] = dump(Node1, Tab),
+    [{a},{b},{c},{d}] = dump(Node2, Tab),
     insert(Node1, Tab, {f}),
     insert(Node4, Tab, {e}),
-%   [insert(Node1, Tab, {X}) || X <- lists:seq(1, 100000)],
-    ct:pal("n1 ~p~n", [dump(Node1, Tab)]),
-    ct:pal("n2 ~p~n", [dump(Node2, Tab)]),
-    ct:pal("n3 ~p~n", [dump(Node3, Tab)]),
-    ct:pal("n4 ~p~n", [dump(Node4, Tab)]),
-
-    ct:pal("other_nodes ~p~n", [other_nodes(Node1, Tab)]),
-    ct:pal("other_nodes ~p~n", [other_nodes(Node2, Tab)]),
-    ct:pal("other_nodes ~p~n", [other_nodes(Node3, Tab)]),
-    ct:pal("other_nodes ~p~n", [other_nodes(Node4, Tab)]),
-    error(oops),
+    AF = [{a},{b},{c},{d},{e},{f}],
+    AF = dump(Node1, Tab),
+    AF = dump(Node2, Tab),
+    AF = dump(Node3, Tab),
+    AF = dump(Node4, Tab),
+    [Node2, Node3, Node4] = other_nodes(Node1, Tab),
+    [Node1, Node3, Node4] = other_nodes(Node2, Tab),
+    [Node1, Node2, Node4] = other_nodes(Node3, Tab),
+    [Node1, Node2, Node3] = other_nodes(Node4, Tab),
     ok.
 
 start(Node, Tab) ->
@@ -64,7 +62,7 @@ dump(Node, Tab) ->
     rpc(Node, kiss, dump, [Tab]).
 
 other_nodes(Node, Tab) ->
-    rpc(Node, kiss, other_nodes, [Tab]).
+    [Node || {Node, _, _} <- rpc(Node, kiss, other_nodes, [Tab])].
 
 join(Node1, Node2, Tab) ->
     rpc(Node1, kiss, join, [Node2, Tab]).
