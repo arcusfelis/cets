@@ -59,11 +59,13 @@ wait_for_inserted([]) ->
     ok.
 
 other_nodes(Tab) ->
-    gen_server:call(Tab, get_other_nodes).
+%   gen_server:call(Tab, get_other_nodes).
+    kiss_pt:get(Tab).
 
 init([Tab]) ->
     ets:new(Tab, [ordered_set, named_table,
                   public, {read_concurrency, true}]),
+    update_pt(Tab, []),
     {ok, #{tab => Tab, other_nodes => []}}.
 
 handle_call({join, RemoteNode}, From, State) ->
@@ -88,7 +90,8 @@ handle_info({insert_from_remote_node, Mon, Pid, Rec}, State = #{tab := Tab}) ->
     Pid ! {inserted, Mon},
     {noreply, State}.
 
-terminate(_Reason, _State) ->
+terminate(_Reason, _State = #{tab := Tab}) ->
+    kiss_pt:put(Tab, []),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -111,6 +114,8 @@ handle_join(RemoteNode, State = #{tab := Tab, other_nodes := Nodes}) ->
                             Mon = erlang:monitor(process, RemotePid),
                             OtherPids = [Pid || {_, Pid, _} <- OtherNodes],
                             Nodes2 = start_proxies_for([RemotePid|OtherPids]) ++ Nodes,
+                            %% Ask our node to replicate data there before applying the dump
+                            update_pt(Tab, Nodes2),
                             OurDump = dump(Tab),
                             send_dump_to_remote_node(RemotePid, self(), OurDump),
                             insert_many(Tab, Dump),
@@ -135,6 +140,7 @@ handle_remote_add_node_to_schema(ServerPid, OtherNodes, State = #{tab := Tab, ot
             Mon = erlang:monitor(process, ServerPid),
             OtherPids = [Pid || {_, Pid, _} <- OtherNodes],
             Nodes2 = start_proxies_for([ServerPid|OtherPids]) ++ Nodes,
+            update_pt(Tab, Nodes2),
             {reply, {ok, dump(Tab), Nodes}, State#{other_nodes => Nodes2}}
     end.
 
@@ -155,6 +161,11 @@ insert_many(Tab, [Rec|Recs]) ->
 insert_many(_Tab, []) ->
     ok.
 
-handle_remote_down(Pid, State = #{other_nodes := Nodes}) ->
+handle_remote_down(Pid, State = #{tab := Tab, other_nodes := Nodes}) ->
     Nodes2 = lists:keydelete(Pid, 2, Nodes),
+    update_pt(Tab, Nodes2),
     {noreply, State#{other_nodes => Nodes2}}.
+
+%% Called each time other_nodes changes
+update_pt(Tab, Nodes2) ->
+    kiss_pt:put(Tab, Nodes2).
