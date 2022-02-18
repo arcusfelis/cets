@@ -2,7 +2,10 @@
 %% One file, everything is simple, but we don't silently hide race conditions
 %% No transactions
 %% We don't use rpc module, because it is one gen_server
+%% We monitor a proxy module (so, no remote monitors on each insert)
 
+
+%% If we write in format {Key, WriterName}, we should resolve conflicts automatically.
 
 %% We don't use monitors to avoid round-trips (that's why we don't use calls neither)
 -module(kiss).
@@ -23,8 +26,8 @@ stop(Tab) ->
 dump(Tab) ->
     ets:tab2list(Tab).
 
-join(RemoteNode, Tab) when RemoteNode =/= node() ->
-    gen_server:call(Tab, {join, RemoteNode}, infinity).
+join(RemotePid, Tab) when is_pid(RemotePid) ->
+    gen_server:call(Tab, {join, RemotePid}, infinity).
 
 remote_add_node_to_schema(RemotePid, ServerPid, OtherNodes) ->
     gen_server:call(RemotePid, {remote_add_node_to_schema, ServerPid, OtherNodes}, infinity).
@@ -37,16 +40,18 @@ send_dump_to_remote_node(_RemotePid, _FromPid, []) ->
 send_dump_to_remote_node(RemotePid, FromPid, OurDump) ->
     gen_server:call(RemotePid, {send_dump_to_remote_node, FromPid, OurDump}, infinity).
 
+%% Inserts do not override data (i.e. immunable)
+%% But we can remove data
 %% Key is {USR, Sid, UpdateNumber}
 %% Where first UpdateNumber is 0
 insert(Tab, Rec) ->
-    Nodes = other_nodes(Tab),
-    ets:insert_new(Tab, Rec),
+    Nodes = other_locations(Tab),
+    ets:insert(Tab, Rec),
     %% Insert to other nodes and block till written
     Monitors = insert_to_remote_nodes(Nodes, Rec),
     wait_for_inserted(Monitors).
 
-insert_to_remote_nodes([{_RemoteNode, RemotePid, ProxyPid}|Nodes], Rec) ->
+insert_to_remote_nodes([{RemotePid, ProxyPid}|Nodes], Rec) ->
     Mon = erlang:monitor(process, ProxyPid),
     erlang:send(RemotePid, {insert_from_remote_node, Mon, self(), Rec}, [noconnect]),
     [Mon|insert_to_remote_nodes(Nodes, Rec)];
@@ -63,9 +68,12 @@ wait_for_inserted([Mon|Monitors]) ->
 wait_for_inserted([]) ->
     ok.
 
-other_nodes(Tab) ->
+other_locations(Tab) ->
 %   gen_server:call(Tab, get_other_nodes).
     kiss_pt:get(Tab).
+
+other_nodes(Tab) ->
+    lists:sort([node(Pid) || {Pid, _} <- other_locations(Tab)]).
 
 init([Tab]) ->
     ets:new(Tab, [ordered_set, named_table,
@@ -73,8 +81,8 @@ init([Tab]) ->
     update_pt(Tab, []),
     {ok, #{tab => Tab, other_nodes => []}}.
 
-handle_call({join, RemoteNode}, _From, State) ->
-    handle_join(RemoteNode, State);
+handle_call({join, RemotePid}, _From, State) ->
+    handle_join(RemotePid, State);
 handle_call({remote_add_node_to_schema, ServerPid, OtherPids}, _From, State) ->
     handle_remote_add_node_to_schema(ServerPid, OtherPids, State);
 handle_call({remote_just_add_node_to_schema, ServerPid, OtherPids}, _From, State) ->
@@ -84,7 +92,7 @@ handle_call({send_dump_to_remote_node, FromPid, Dump}, _From, State) ->
 handle_call(get_other_nodes, _From, State = #{other_nodes := Nodes}) ->
     {reply, Nodes, State};
 handle_call({insert, Rec}, _From, State = #{tab := Tab}) ->
-    ets:insert_new(Tab, Rec),
+    ets:insert(Tab, Rec),
     {reply, ok, State}.
 
 handle_cast(_Msg, State) ->
@@ -93,7 +101,7 @@ handle_cast(_Msg, State) ->
 handle_info({'DOWN', _Mon, Pid, _Reason}, State) ->
     handle_down(Pid, State);
 handle_info({insert_from_remote_node, Mon, Pid, Rec}, State = #{tab := Tab}) ->
-    ets:insert_new(Tab, Rec),
+    ets:insert(Tab, Rec),
     Pid ! {inserted, Mon},
     {noreply, State}.
 
@@ -105,76 +113,60 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 
-handle_join(RemoteNode, State = #{tab := Tab, other_nodes := Nodes}) ->
-    case lists:keymember(RemoteNode, 1, Nodes) of
+handle_join(RemotePid, State = #{tab := Tab, other_nodes := Nodes}) when is_pid(RemotePid) ->
+    case lists:keymember(RemotePid, 1, Nodes) of
         true ->
             %% Already added
             {reply, ok, State};
         false ->
-            RemotePid = rpc:call(RemoteNode, erlang, whereis, [Tab]),
-            case is_pid(RemotePid) of
-                false ->
-                    {reply, {error, remote_process_not_found}, State};
-                true ->
-                    case remote_add_node_to_schema(RemotePid, self(), just_pids(Nodes)) of
-                        {ok, Dump, OtherNodes} ->
-                            KnownPids = [Pid || {_, Pid, _} <- Nodes],
-                            OtherPids = [Pid || {_, Pid, _} <- OtherNodes],
-                            %% Let all nodes to know each other
-                            [remote_just_add_node_to_schema(Pid, self(), KnownPids) || Pid <- OtherPids],
-                            [remote_just_add_node_to_schema(Pid, self(), [RemotePid|OtherPids]) || Pid <- KnownPids],
-                            Nodes2 = lists:usort(start_proxies_for([RemotePid|OtherPids], Nodes) ++ Nodes),
-                            %% Ask our node to replicate data there before applying the dump
-                            update_pt(Tab, Nodes2),
-                            OurDump = dump(Tab),
-                            %% Send to all nodes from that partition
-                            [send_dump_to_remote_node(Pid, self(), OurDump) || Pid <- [RemotePid|OtherPids]],
-                            %% Apply to our nodes
-                            [send_dump_to_remote_node(Pid, self(), Dump) || Pid <- KnownPids],
-                            insert_many(Tab, Dump),
-                            %% Add ourself into remote schema
-                            %% Add remote nodes into our schema
-                            %% Copy from our node / Copy into our node
-                            {reply, ok, State#{other_nodes => Nodes2}};
-                       Other ->
-                            error_logger:error_msg("remote_add_node_to_schema failed ~p", [Other]),
-                            {reply, {error, remote_add_node_to_schema_failed}, State}
-                    end
+            KnownPids = [Pid || {Pid, _} <- Nodes],
+            %% TODO can crash
+            case remote_add_node_to_schema(RemotePid, self(), KnownPids) of
+                {ok, Dump, OtherPids} ->
+                    %% Let all nodes to know each other
+                    [remote_just_add_node_to_schema(Pid, self(), KnownPids) || Pid <- OtherPids],
+                    [remote_just_add_node_to_schema(Pid, self(), [RemotePid|OtherPids]) || Pid <- KnownPids],
+                    Nodes2 = lists:usort(start_proxies_for([RemotePid|OtherPids], Nodes) ++ Nodes),
+                    %% Ask our node to replicate data there before applying the dump
+                    update_pt(Tab, Nodes2),
+                    OurDump = dump(Tab),
+                    %% Send to all nodes from that partition
+                    [send_dump_to_remote_node(Pid, self(), OurDump) || Pid <- [RemotePid|OtherPids]],
+                    %% Apply to our nodes
+                    [send_dump_to_remote_node(Pid, self(), Dump) || Pid <- KnownPids],
+                    insert_many(Tab, Dump),
+                    %% Add ourself into remote schema
+                    %% Add remote nodes into our schema
+                    %% Copy from our node / Copy into our node
+                    {reply, ok, State#{other_nodes => Nodes2}};
+               Other ->
+                    error_logger:error_msg("remote_add_node_to_schema failed ~p", [Other]),
+                    {reply, {error, remote_add_node_to_schema_failed}, State}
             end
     end.
 
-just_pids(Nodes) ->
-    [Pid || {_, Pid, _} <- Nodes].
-
 handle_remote_add_node_to_schema(ServerPid, OtherPids, State = #{tab := Tab}) ->
     case handle_remote_just_add_node_to_schema(ServerPid, OtherPids, State) of
-        {reply, {ok, Nodes}, State2} ->
-            {reply, {ok, dump(Tab), Nodes}, State2};
+        {reply, {ok, KnownPids}, State2} ->
+            {reply, {ok, dump(Tab), KnownPids}, State2};
         Other ->
             Other
     end.
 
-handle_remote_just_add_node_to_schema(ServerPid, OtherPids, State = #{tab := Tab, other_nodes := Nodes}) ->
-    RemoteNode = node(ServerPid),
-    case lists:member(RemoteNode, Nodes) of
-        true ->
-            %% Already added (should not happen)
-            {reply, {error, already_added}, State};
-        false ->
-            Nodes2 = lists:usort(start_proxies_for([ServerPid|OtherPids], Nodes) ++ Nodes),
-            update_pt(Tab, Nodes2),
-            {reply, {ok, Nodes}, State#{other_nodes => Nodes2}}
-    end.
+handle_remote_just_add_node_to_schema(RemotePid, OtherPids, State = #{tab := Tab, other_nodes := Nodes}) ->
+    Nodes2 = lists:usort(start_proxies_for([RemotePid|OtherPids], Nodes) ++ Nodes),
+    update_pt(Tab, Nodes2),
+    KnownPids = [Pid || {Pid, _} <- Nodes],
+    {reply, {ok, KnownPids}, State#{other_nodes => Nodes2}}.
 
-start_proxies_for([RemotePid|OtherPids], AlreadyAddedNodes) ->
-    RemoteNode = node(RemotePid),
-    case lists:keymember(RemoteNode, 1, AlreadyAddedNodes) of
+start_proxies_for([RemotePid|OtherPids], AlreadyAddedNodes) when is_pid(RemotePid), RemotePid =/= self() ->
+    case lists:keymember(RemotePid, 1, AlreadyAddedNodes) of
         false ->
             {ok, ProxyPid} = kiss_proxy:start(RemotePid),
             erlang:monitor(process, ProxyPid),
-            [{RemoteNode, RemotePid, ProxyPid}|start_proxies_for(OtherPids, AlreadyAddedNodes)];
+            [{RemotePid, ProxyPid}|start_proxies_for(OtherPids, AlreadyAddedNodes)];
         true ->
-            error_logger:info_msg("what=already_added node=~p", [RemoteNode]),
+            error_logger:info_msg("what=already_added remote_pid=~p node=~p", [RemotePid, node(RemotePid)]),
             start_proxies_for(OtherPids, AlreadyAddedNodes)
     end;
 start_proxies_for([], _AlreadyAddedNodes) ->
@@ -185,14 +177,14 @@ handle_send_dump_to_remote_node(_FromPid, Dump, State = #{tab := Tab}) ->
     {reply, ok, State}.
 
 insert_many(Tab, [Rec|Recs]) ->
-    ets:insert_new(Tab, Rec),
+    ets:insert(Tab, Rec),
     insert_many(Tab, Recs);
 insert_many(_Tab, []) ->
     ok.
 
 handle_down(Pid, State = #{tab := Tab, other_nodes := Nodes}) ->
     %% Down from a proxy
-    Nodes2 = lists:keydelete(Pid, 3, Nodes),
+    Nodes2 = lists:keydelete(Pid, 2, Nodes),
     update_pt(Tab, Nodes2),
     {noreply, State#{other_nodes => Nodes2}}.
 

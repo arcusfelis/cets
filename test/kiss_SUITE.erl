@@ -24,19 +24,19 @@ ets_tests(Config) ->
     Node1 = node(),
     [Node2, Node3, Node4] = proplists:get_value(nodes, Config),
     Tab = tab1,
-    start(Node1, Tab),
-    start(Node2, Tab),
-    start(Node3, Tab),
-    start(Node4, Tab),
-    join(Node1, Node3, Tab),
-    join(Node2, Node4, Tab),
+    {ok, Pid1} = start(Node1, Tab),
+    {ok, Pid2} = start(Node2, Tab),
+    {ok, Pid3} = start(Node3, Tab),
+    {ok, Pid4} = start(Node4, Tab),
+    join(Node1, Pid3, Tab),
+    join(Node2, Pid4, Tab),
     insert(Node1, Tab, {a}),
     insert(Node2, Tab, {b}),
     insert(Node3, Tab, {c}),
     insert(Node4, Tab, {d}),
     [{a},{c}] = dump(Node1, Tab),
     [{b},{d}] = dump(Node2, Tab),
-    join(Node1, Node2, Tab),
+    join(Node1, Pid2, Tab),
     [{a},{b},{c},{d}] = dump(Node1, Tab),
     [{a},{b},{c},{d}] = dump(Node2, Tab),
     insert(Node1, Tab, {f}),
@@ -62,7 +62,7 @@ dump(Node, Tab) ->
     rpc(Node, kiss, dump, [Tab]).
 
 other_nodes(Node, Tab) ->
-    [Node || {Node, _, _} <- rpc(Node, kiss, other_nodes, [Tab])].
+    rpc(Node, kiss, other_nodes, [Tab]).
 
 join(Node1, Node2, Tab) ->
     rpc(Node1, kiss, join, [Node2, Tab]).
