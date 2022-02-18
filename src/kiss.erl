@@ -45,16 +45,16 @@ send_dump_to_remote_node(RemotePid, FromPid, OurDump) ->
 %% Key is {USR, Sid, UpdateNumber}
 %% Where first UpdateNumber is 0
 insert(Tab, Rec) ->
-    Nodes = other_locations(Tab),
+    Servers = other_servers(Tab),
     ets:insert(Tab, Rec),
     %% Insert to other nodes and block till written
-    Monitors = insert_to_remote_nodes(Nodes, Rec),
+    Monitors = insert_to_remote_nodes(Servers, Rec),
     wait_for_inserted(Monitors).
 
-insert_to_remote_nodes([{RemotePid, ProxyPid}|Nodes], Rec) ->
+insert_to_remote_nodes([{RemotePid, ProxyPid}|Servers], Rec) ->
     Mon = erlang:monitor(process, ProxyPid),
     erlang:send(RemotePid, {insert_from_remote_node, Mon, self(), Rec}, [noconnect]),
-    [Mon|insert_to_remote_nodes(Nodes, Rec)];
+    [Mon|insert_to_remote_nodes(Servers, Rec)];
 insert_to_remote_nodes([], _Rec) ->
     [].
 
@@ -68,18 +68,18 @@ wait_for_inserted([Mon|Monitors]) ->
 wait_for_inserted([]) ->
     ok.
 
-other_locations(Tab) ->
-%   gen_server:call(Tab, get_other_nodes).
+other_servers(Tab) ->
+%   gen_server:call(Tab, get_other_servers).
     kiss_pt:get(Tab).
 
 other_nodes(Tab) ->
-    lists:sort([node(Pid) || {Pid, _} <- other_locations(Tab)]).
+    lists:sort([node(Pid) || {Pid, _} <- other_servers(Tab)]).
 
 init([Tab]) ->
     ets:new(Tab, [ordered_set, named_table,
                   public, {read_concurrency, true}]),
     update_pt(Tab, []),
-    {ok, #{tab => Tab, other_nodes => []}}.
+    {ok, #{tab => Tab, other_servers => []}}.
 
 handle_call({join, RemotePid}, _From, State) ->
     handle_join(RemotePid, State);
@@ -89,8 +89,8 @@ handle_call({remote_just_add_node_to_schema, ServerPid, OtherPids}, _From, State
     handle_remote_just_add_node_to_schema(ServerPid, OtherPids, State);
 handle_call({send_dump_to_remote_node, FromPid, Dump}, _From, State) ->
     handle_send_dump_to_remote_node(FromPid, Dump, State);
-handle_call(get_other_nodes, _From, State = #{other_nodes := Nodes}) ->
-    {reply, Nodes, State};
+handle_call(get_other_servers, _From, State = #{other_servers := Servers}) ->
+    {reply, Servers, State};
 handle_call({insert, Rec}, _From, State = #{tab := Tab}) ->
     ets:insert(Tab, Rec),
     {reply, ok, State}.
@@ -113,22 +113,22 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 
-handle_join(RemotePid, State = #{tab := Tab, other_nodes := Nodes}) when is_pid(RemotePid) ->
-    case lists:keymember(RemotePid, 1, Nodes) of
+handle_join(RemotePid, State = #{tab := Tab, other_servers := Servers}) when is_pid(RemotePid) ->
+    case lists:keymember(RemotePid, 1, Servers) of
         true ->
             %% Already added
             {reply, ok, State};
         false ->
-            KnownPids = [Pid || {Pid, _} <- Nodes],
+            KnownPids = [Pid || {Pid, _} <- Servers],
             %% TODO can crash
             case remote_add_node_to_schema(RemotePid, self(), KnownPids) of
                 {ok, Dump, OtherPids} ->
                     %% Let all nodes to know each other
                     [remote_just_add_node_to_schema(Pid, self(), KnownPids) || Pid <- OtherPids],
                     [remote_just_add_node_to_schema(Pid, self(), [RemotePid|OtherPids]) || Pid <- KnownPids],
-                    Nodes2 = lists:usort(start_proxies_for([RemotePid|OtherPids], Nodes) ++ Nodes),
+                    Servers2 = lists:usort(start_proxies_for([RemotePid|OtherPids], Servers) ++ Servers),
                     %% Ask our node to replicate data there before applying the dump
-                    update_pt(Tab, Nodes2),
+                    update_pt(Tab, Servers2),
                     OurDump = dump(Tab),
                     %% Send to all nodes from that partition
                     [send_dump_to_remote_node(Pid, self(), OurDump) || Pid <- [RemotePid|OtherPids]],
@@ -138,7 +138,7 @@ handle_join(RemotePid, State = #{tab := Tab, other_nodes := Nodes}) when is_pid(
                     %% Add ourself into remote schema
                     %% Add remote nodes into our schema
                     %% Copy from our node / Copy into our node
-                    {reply, ok, State#{other_nodes => Nodes2}};
+                    {reply, ok, State#{other_servers => Servers2}};
                Other ->
                     error_logger:error_msg("remote_add_node_to_schema failed ~p", [Other]),
                     {reply, {error, remote_add_node_to_schema_failed}, State}
@@ -153,11 +153,11 @@ handle_remote_add_node_to_schema(ServerPid, OtherPids, State = #{tab := Tab}) ->
             Other
     end.
 
-handle_remote_just_add_node_to_schema(RemotePid, OtherPids, State = #{tab := Tab, other_nodes := Nodes}) ->
-    Nodes2 = lists:usort(start_proxies_for([RemotePid|OtherPids], Nodes) ++ Nodes),
-    update_pt(Tab, Nodes2),
-    KnownPids = [Pid || {Pid, _} <- Nodes],
-    {reply, {ok, KnownPids}, State#{other_nodes => Nodes2}}.
+handle_remote_just_add_node_to_schema(RemotePid, OtherPids, State = #{tab := Tab, other_servers := Servers}) ->
+    Servers2 = lists:usort(start_proxies_for([RemotePid|OtherPids], Servers) ++ Servers),
+    update_pt(Tab, Servers2),
+    KnownPids = [Pid || {Pid, _} <- Servers],
+    {reply, {ok, KnownPids}, State#{other_servers => Servers2}}.
 
 start_proxies_for([RemotePid|OtherPids], AlreadyAddedNodes) when is_pid(RemotePid), RemotePid =/= self() ->
     case lists:keymember(RemotePid, 1, AlreadyAddedNodes) of
@@ -182,12 +182,12 @@ insert_many(Tab, [Rec|Recs]) ->
 insert_many(_Tab, []) ->
     ok.
 
-handle_down(Pid, State = #{tab := Tab, other_nodes := Nodes}) ->
+handle_down(Pid, State = #{tab := Tab, other_servers := Servers}) ->
     %% Down from a proxy
-    Nodes2 = lists:keydelete(Pid, 2, Nodes),
-    update_pt(Tab, Nodes2),
-    {noreply, State#{other_nodes => Nodes2}}.
+    Servers2 = lists:keydelete(Pid, 2, Servers),
+    update_pt(Tab, Servers2),
+    {noreply, State#{other_servers => Servers2}}.
 
-%% Called each time other_nodes changes
-update_pt(Tab, Nodes2) ->
-    kiss_pt:put(Tab, Nodes2).
+%% Called each time other_servers changes
+update_pt(Tab, Servers2) ->
+    kiss_pt:put(Tab, Servers2).
