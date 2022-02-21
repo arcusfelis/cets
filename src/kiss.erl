@@ -32,12 +32,19 @@ dump(Tab) ->
 %% Writes from other nodes would wait for join completion.
 %% LockKey should be the same on all nodes.
 join(LockKey, Tab, RemotePid) when is_pid(RemotePid) ->
-    F = fun() -> join_loop(LockKey, Tab, RemotePid) end,
+    Start = os:timestamp(),
+    F = fun() -> join_loop(LockKey, Tab, RemotePid, Start) end,
     kiss_long:run("task=join table=~p remote_pid=~p remote_node=~p ",
                   [Tab, RemotePid, node(RemotePid)], F).
 
-join_loop(LockKey, Tab, RemotePid) ->
-    F = fun() -> gen_server:call(Tab, {join, RemotePid}, infinity) end,
+join_loop(LockKey, Tab, RemotePid, Start) ->
+    F = fun() ->
+        Diff = timer:now_diff(os:timestamp(), Start) div 1000,
+        %% Getting the lock could take really long time in case nodes are
+        %% overloaded or joining is already in progress on another node
+        error_logger:info_msg("what=join_got_lock table=~p after_time=~p ms", [Tab, Diff]),
+        gen_server:call(Tab, {join, RemotePid}, infinity)
+        end,
     LockRequest = {LockKey, self()},
     %% Just lock all nodes, no magic here :)
     Nodes = [node() | nodes()],
@@ -45,7 +52,7 @@ join_loop(LockKey, Tab, RemotePid) ->
     case global:trans(LockRequest, F, Nodes, Retries) of
         aborted ->
             error_logger:error_msg("what=join_retry reason=lock_aborted", []),
-            join_loop(LockKey, Tab, RemotePid);
+            join_loop(LockKey, Tab, RemotePid, Start);
         Result ->
             Result
     end.
