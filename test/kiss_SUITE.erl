@@ -60,6 +60,11 @@ test_multinode(Config) ->
     Same([{a},{b},{c},{d},{f}]),
     delete(Node4, Tab, a),
     Same([{b},{c},{d},{f}]),
+    %% Bulk operations are supported
+    insert(Node4, Tab, [{m},{a},{n},{y}]),
+    Same([{a},{b},{c},{d},{f},{m},{n},{y}]),
+    delete_many(Node4, Tab, [a,n]),
+    Same([{b},{c},{d},{f},{m},{y}]),
     ok.
 
 test_multinode_auto_discovery(Config) ->
@@ -110,6 +115,9 @@ insert(Node, Tab, Rec) ->
 
 delete(Node, Tab, Key) ->
     rpc(Node, kiss, delete, [Tab, Key]).
+
+delete_many(Node, Tab, Keys) ->
+    rpc(Node, kiss, delete_many, [Tab, Keys]).
 
 dump(Node, Tab) ->
     rpc(Node, kiss, dump, [Tab]).

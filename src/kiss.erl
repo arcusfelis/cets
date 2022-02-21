@@ -11,7 +11,7 @@
 
 %% We don't use monitors to avoid round-trips (that's why we don't use calls neither)
 -module(kiss).
--export([start/2, stop/1, dump/1, insert/2, delete/2, join/3, other_nodes/1]).
+-export([start/2, stop/1, dump/1, insert/2, delete/2, delete_many/2, join/3, other_nodes/1]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
@@ -88,7 +88,7 @@ send_dump_to_remote_node(RemotePid, FromPid, OurDump) ->
                   [RemotePid, length(OurDump)], F).
 
 %% Only the node that owns the data could update/remove the data.
-%% Key is {USR, Sid}
+%% Ideally Key should contain inserter node info (for cleaning).
 insert(Tab, Rec) ->
     Servers = other_servers(Tab),
     ets:insert(Tab, Rec),
@@ -104,16 +104,20 @@ insert_to_remote_nodes([], _Rec) ->
     [].
 
 delete(Tab, Key) ->
+    delete_many(Tab, [Key]).
+
+%% A separate function for multidelete (because key COULD be a list, so no confusion)
+delete_many(Tab, Keys) ->
     Servers = other_servers(Tab),
-    ets:delete(Tab, Key),
-    Monitors = delete_to_remote_nodes(Servers, Key),
+    [ets:delete(Tab, Key) || Key <- Keys],
+    Monitors = delete_to_remote_nodes(Servers, Keys),
     wait_for_updated(Monitors).
 
-delete_to_remote_nodes([{RemotePid, ProxyPid}|Servers], Key) ->
+delete_to_remote_nodes([{RemotePid, ProxyPid}|Servers], Keys) ->
     Mon = erlang:monitor(process, ProxyPid),
-    erlang:send(RemotePid, {delete_from_remote_node, Mon, self(), Key}, [noconnect]),
-    [Mon|delete_to_remote_nodes(Servers, Key)];
-delete_to_remote_nodes([], _Key) ->
+    erlang:send(RemotePid, {delete_from_remote_node, Mon, self(), Keys}, [noconnect]),
+    [Mon|delete_to_remote_nodes(Servers, Keys)];
+delete_to_remote_nodes([], _Keys) ->
     [].
 
 wait_for_updated([Mon|Monitors]) ->
@@ -162,8 +166,8 @@ handle_info({insert_from_remote_node, Mon, Pid, Rec}, State = #{tab := Tab}) ->
     ets:insert(Tab, Rec),
     Pid ! {updated, Mon},
     {noreply, State};
-handle_info({delete_from_remote_node, Mon, Pid, Key}, State = #{tab := Tab}) ->
-    ets:delete(Tab, Key),
+handle_info({delete_from_remote_node, Mon, Pid, Keys}, State = #{tab := Tab}) ->
+    [ets:delete(Tab, Key) || Key <- Keys],
     Pid ! {updated, Mon},
     {noreply, State}.
 
