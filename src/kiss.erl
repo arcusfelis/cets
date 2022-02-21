@@ -11,7 +11,7 @@
 
 %% We don't use monitors to avoid round-trips (that's why we don't use calls neither)
 -module(kiss).
--export([start/2, stop/1, dump/1, insert/2, join/3, other_nodes/1]).
+-export([start/2, stop/1, dump/1, insert/2, delete/2, join/3, other_nodes/1]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
@@ -94,7 +94,7 @@ insert(Tab, Rec) ->
     ets:insert(Tab, Rec),
     %% Insert to other nodes and block till written
     Monitors = insert_to_remote_nodes(Servers, Rec),
-    wait_for_inserted(Monitors).
+    wait_for_updated(Monitors).
 
 insert_to_remote_nodes([{RemotePid, ProxyPid}|Servers], Rec) ->
     Mon = erlang:monitor(process, ProxyPid),
@@ -103,14 +103,27 @@ insert_to_remote_nodes([{RemotePid, ProxyPid}|Servers], Rec) ->
 insert_to_remote_nodes([], _Rec) ->
     [].
 
-wait_for_inserted([Mon|Monitors]) ->
+delete(Tab, Key) ->
+    Servers = other_servers(Tab),
+    ets:delete(Tab, Key),
+    Monitors = delete_to_remote_nodes(Servers, Key),
+    wait_for_updated(Monitors).
+
+delete_to_remote_nodes([{RemotePid, ProxyPid}|Servers], Key) ->
+    Mon = erlang:monitor(process, ProxyPid),
+    erlang:send(RemotePid, {delete_from_remote_node, Mon, self(), Key}, [noconnect]),
+    [Mon|delete_to_remote_nodes(Servers, Key)];
+delete_to_remote_nodes([], _Key) ->
+    [].
+
+wait_for_updated([Mon|Monitors]) ->
     receive
-        {inserted, Mon2} when Mon2 =:= Mon ->
-            wait_for_inserted(Monitors);
+        {updated, Mon2} when Mon2 =:= Mon ->
+            wait_for_updated(Monitors);
         {'DOWN', Mon2, process, _Pid, _Reason} when Mon2 =:= Mon ->
-            wait_for_inserted(Monitors)
+            wait_for_updated(Monitors)
     end;
-wait_for_inserted([]) ->
+wait_for_updated([]) ->
     ok.
 
 other_servers(Tab) ->
@@ -147,7 +160,11 @@ handle_info({'DOWN', _Mon, process, Pid, _Reason}, State) ->
     handle_down(Pid, State);
 handle_info({insert_from_remote_node, Mon, Pid, Rec}, State = #{tab := Tab}) ->
     ets:insert(Tab, Rec),
-    Pid ! {inserted, Mon},
+    Pid ! {updated, Mon},
+    {noreply, State};
+handle_info({delete_from_remote_node, Mon, Pid, Key}, State = #{tab := Tab}) ->
+    ets:delete(Tab, Key),
+    Pid ! {updated, Mon},
     {noreply, State}.
 
 terminate(_Reason, _State = #{tab := Tab}) ->

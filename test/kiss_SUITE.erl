@@ -45,15 +45,21 @@ test_multinode(Config) ->
     [{a},{b},{c},{d}] = dump(Node2, Tab),
     insert(Node1, Tab, {f}),
     insert(Node4, Tab, {e}),
-    AF = [{a},{b},{c},{d},{e},{f}],
-    AF = dump(Node1, Tab),
-    AF = dump(Node2, Tab),
-    AF = dump(Node3, Tab),
-    AF = dump(Node4, Tab),
+    Same = fun(X) ->
+               X = dump(Node1, Tab),
+               X = dump(Node2, Tab),
+               X = dump(Node3, Tab),
+               X = dump(Node4, Tab)
+           end,
+    Same([{a},{b},{c},{d},{e},{f}]),
     [Node2, Node3, Node4] = other_nodes(Node1, Tab),
     [Node1, Node3, Node4] = other_nodes(Node2, Tab),
     [Node1, Node2, Node4] = other_nodes(Node3, Tab),
     [Node1, Node2, Node3] = other_nodes(Node4, Tab),
+    delete(Node1, Tab, e),
+    Same([{a},{b},{c},{d},{f}]),
+    delete(Node4, Tab, a),
+    Same([{b},{c},{d},{f}]),
     ok.
 
 test_multinode_auto_discovery(Config) ->
@@ -101,6 +107,9 @@ start(Node, Tab) ->
 
 insert(Node, Tab, Rec) ->
     rpc(Node, kiss, insert, [Tab, Rec]).
+
+delete(Node, Tab, Key) ->
+    rpc(Node, kiss, delete, [Tab, Key]).
 
 dump(Node, Tab) ->
     rpc(Node, kiss, dump, [Tab]).
