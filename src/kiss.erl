@@ -110,14 +110,14 @@ delete(Tab, Key) ->
 delete_many(Tab, Keys) ->
     Servers = other_servers(Tab),
     [ets:delete(Tab, Key) || Key <- Keys],
-    Monitors = delete_to_remote_nodes(Servers, Keys),
+    Monitors = delete_from_remote_nodes(Servers, Keys),
     wait_for_updated(Monitors).
 
-delete_to_remote_nodes([{RemotePid, ProxyPid}|Servers], Keys) ->
+delete_from_remote_nodes([{RemotePid, ProxyPid}|Servers], Keys) ->
     Mon = erlang:monitor(process, ProxyPid),
     erlang:send(RemotePid, {delete_from_remote_node, Mon, self(), Keys}, [noconnect]),
-    [Mon|delete_to_remote_nodes(Servers, Keys)];
-delete_to_remote_nodes([], _Keys) ->
+    [Mon|delete_from_remote_nodes(Servers, Keys)];
+delete_from_remote_nodes([], _Keys) ->
     [].
 
 wait_for_updated([Mon|Monitors]) ->
