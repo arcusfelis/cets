@@ -164,11 +164,11 @@ handle_info({'DOWN', _Mon, process, Pid, _Reason}, State) ->
     handle_down(Pid, State);
 handle_info({insert_from_remote_node, Mon, Pid, Rec}, State = #{tab := Tab}) ->
     ets:insert(Tab, Rec),
-    Pid ! {updated, Mon},
+    reply_updated(Pid, Mon),
     {noreply, State};
 handle_info({delete_from_remote_node, Mon, Pid, Keys}, State = #{tab := Tab}) ->
     [ets:delete(Tab, Key) || Key <- Keys],
-    Pid ! {updated, Mon},
+    reply_updated(Pid, Mon),
     {noreply, State}.
 
 terminate(_Reason, _State = #{tab := Tab}) ->
@@ -284,3 +284,7 @@ call_user_handle_down(RemotePid, _State = #{tab := Tab, opts := Opts}) ->
         _ ->
             ok
     end.
+
+reply_updated(Pid, Mon) ->
+    %% We really don't wanna block this process
+    erlang:send(Pid, {updated, Mon}, [noconnect, nosuspend]).
