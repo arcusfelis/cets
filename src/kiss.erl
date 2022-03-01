@@ -98,7 +98,7 @@ insert(Tab, Rec) ->
 
 insert_to_remote_nodes([{RemotePid, ProxyPid}|Servers], Rec) ->
     Mon = erlang:monitor(process, ProxyPid),
-    erlang:send(RemotePid, {insert_from_remote_node, Mon, self(), Rec}, [noconnect]),
+    erlang:send(RemotePid, {insert_from_remote_node, Mon, self(), Rec}, [noconnect, nosuspend]),
     [Mon|insert_to_remote_nodes(Servers, Rec)];
 insert_to_remote_nodes([], _Rec) ->
     [].
@@ -115,7 +115,7 @@ delete_many(Tab, Keys) ->
 
 delete_from_remote_nodes([{RemotePid, ProxyPid}|Servers], Keys) ->
     Mon = erlang:monitor(process, ProxyPid),
-    erlang:send(RemotePid, {delete_from_remote_node, Mon, self(), Keys}, [noconnect]),
+    erlang:send(RemotePid, {delete_from_remote_node, Mon, self(), Keys}, [noconnect, nosuspend]),
     [Mon|delete_from_remote_nodes(Servers, Keys)];
 delete_from_remote_nodes([], _Keys) ->
     [].
