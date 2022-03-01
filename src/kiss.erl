@@ -246,11 +246,8 @@ handle_send_dump_to_remote_node(_FromPid, Dump, State = #{tab := Tab}) ->
     insert_many(Tab, Dump),
     {reply, ok, State}.
 
-insert_many(Tab, [Rec|Recs]) ->
-    ets:insert(Tab, Rec),
-    insert_many(Tab, Recs);
-insert_many(_Tab, []) ->
-    ok.
+insert_many(Tab, Recs) ->
+    ets:insert(Tab, Recs).
 
 handle_down(ProxyPid, State = #{tab := Tab, other_servers := Servers}) ->
     case lists:keytake(ProxyPid, 2, Servers) of
