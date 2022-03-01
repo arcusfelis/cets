@@ -273,15 +273,9 @@ pids_to_nodes(Pids) ->
 call_user_handle_down(RemotePid, _State = #{tab := Tab, opts := Opts}) ->
     case Opts of
         #{handle_down := F} ->
-            try
-                FF = fun() -> F(#{remote_pid => RemotePid, table => Tab}) end,
-                kiss_long:run("task=call_user_handle_down table=~p remote_pid=~p remote_node=~p ",
-                              [Tab, RemotePid, node(RemotePid)], FF)
-            catch Class:Error:Stacktrace ->
-                error_logger:error_msg("what=call_user_handle_down_failed table=~p "
-                                       "remote_pid=~p remote_node=~p class=~p reason=~0p stacktrace=~0p",
-                                       [Tab, RemotePid, node(RemotePid), Class, Error, Stacktrace])
-            end;
+            FF = fun() -> F(#{remote_pid => RemotePid, table => Tab}) end,
+            kiss_long:run_safely("task=call_user_handle_down table=~p remote_pid=~p remote_node=~p ",
+                                 [Tab, RemotePid, node(RemotePid)], FF);
         _ ->
             ok
     end.
