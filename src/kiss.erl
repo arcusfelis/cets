@@ -48,7 +48,8 @@ join(LockKey, Tab, RemotePid) when is_pid(RemotePid) ->
         false ->
                 Start = os:timestamp(),
                 F = fun() -> join_loop(LockKey, Tab, RemotePid, Start) end,
-                kiss_long:run(#{task => join, table => Tab, remote_pid => RemotePid,
+                kiss_long:run(#{task => join, table => Tab, 
+                                remote_pid => RemotePid,
                                 remote_node => node(RemotePid)}, F)
     end.
 
@@ -115,7 +116,7 @@ delete(Tab, Key) ->
 %% A separate function for multidelete (because key COULD be a list, so no confusion)
 delete_many(Tab, Keys) ->
     Servers = other_servers(Tab),
-    [ets:delete(Tab, Key) || Key <- Keys],
+    ets_delete_keys(Tab, Keys),
     Monitors = delete_from_remote_nodes(Servers, Keys),
     wait_for_updated(Monitors).
 
@@ -144,7 +145,7 @@ other_servers(Tab) ->
     kiss_pt:get(Tab).
 
 other_nodes(Tab) ->
-    lists:sort([node(Pid) || {Pid, _} <- other_servers(Tab)]).
+    lists:usort(pids_to_nodes(servers_to_pids(other_servers(Tab)))).
 
 init([Tab, Opts]) ->
     ets:new(Tab, [ordered_set, named_table,
@@ -172,7 +173,7 @@ handle_info({insert_from_remote_node, Mon, Pid, Rec}, State = #{tab := Tab}) ->
     reply_updated(Pid, Mon),
     {noreply, State};
 handle_info({delete_from_remote_node, Mon, Pid, Keys}, State = #{tab := Tab}) ->
-    [ets:delete(Tab, Key) || Key <- Keys],
+    ets_delete_keys(Tab, Keys),
     reply_updated(Pid, Mon),
     {noreply, State}.
 
@@ -185,12 +186,12 @@ code_change(_OldVsn, State, _Extra) ->
 
 
 handle_join(RemotePid, State = #{tab := Tab, other_servers := Servers}) when is_pid(RemotePid) ->
-    case lists:keymember(RemotePid, 1, Servers) of
+    case has_remote_pid(RemotePid, Servers) of
         true ->
             %% Already added
             {reply, ok, State};
         false ->
-            KnownPids = [Pid || {Pid, _} <- Servers],
+            KnownPids = servers_to_pids(Servers),
             Self = self(),
             %% Remote gen_server calls here are "safe"
             case remote_add_node_to_schema(RemotePid, Self, KnownPids, true) of
@@ -222,7 +223,7 @@ handle_remote_add_node_to_schema(RemotePid, OtherPids, ReturnDump,
                                  State = #{tab := Tab, other_servers := Servers}) ->
     Servers2 = add_servers([RemotePid | OtherPids], Servers),
     kiss_pt:put(Tab, Servers2),
-    KnownPids = [Pid || {Pid, _} <- Servers],
+    KnownPids = servers_to_pids(Servers),
     Dump = case ReturnDump of true -> dump(Tab); false -> not_requested end,
     {reply, {ok, Dump, KnownPids}, State#{other_servers => Servers2}}.
 
@@ -246,23 +247,35 @@ handle_down(ProxyPid, State = #{tab := Tab, other_servers := Servers}) ->
 add_servers(Pids, Servers) ->
     lists:sort(start_proxies_for(Pids, Servers) ++ Servers).
 
-start_proxies_for([RemotePid | OtherPids], AlreadyAddedNodes)
+start_proxies_for([RemotePid | OtherPids], Servers)
   when is_pid(RemotePid), RemotePid =/= self() ->
-    case lists:keymember(RemotePid, 1, AlreadyAddedNodes) of
+    case has_remote_pid(RemotePid, Servers) of
         false ->
             {ok, ProxyPid} = kiss_proxy:start(RemotePid),
             erlang:monitor(process, ProxyPid),
-            [{RemotePid, ProxyPid} | start_proxies_for(OtherPids, AlreadyAddedNodes)];
+            [{RemotePid, ProxyPid} | start_proxies_for(OtherPids, Servers)];
         true ->
             ?LOG_INFO(#{what => already_added,
                         remote_pid => RemotePid, remote_node => node(RemotePid)}),
-            start_proxies_for(OtherPids, AlreadyAddedNodes)
+            start_proxies_for(OtherPids, Servers)
     end;
-start_proxies_for([], _AlreadyAddedNodes) ->
+start_proxies_for([], _Servers) ->
     [].
 
 pids_to_nodes(Pids) ->
     lists:map(fun node/1, Pids).
+
+servers_to_pids(Servers) ->
+    [Pid || {Pid, _} <- Servers].
+
+has_remote_pid(RemotePid, Servers) ->
+    lists:keymember(RemotePid, 1, Servers).
+
+ets_delete_keys(Tab, [Key|Keys]) ->
+    ets:delete(Tab, Key),
+    ets_delete_keys(Tab, Keys);
+ets_delete_keys(_Tab, []) ->
+    ok.
 
 %% Cleanup
 call_user_handle_down(RemotePid, _State = #{tab := Tab, opts := Opts}) ->
