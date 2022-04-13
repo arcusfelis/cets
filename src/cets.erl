@@ -14,7 +14,7 @@
 %% - Add writer pid() or writer node() as a key. And do a proper cleanups using handle_down.
 %%   (the data could still get overwritten though if a node joins back way too quick
 %%    and cleaning is done outside of handle_down)
--module(kiss).
+-module(cets).
 -behaviour(gen_server).
 
 -export([start/2, stop/1, insert/2, delete/2, delete_many/2]).
@@ -75,7 +75,7 @@ send_dump_to_remote_node(RemotePid, NewPids, OurDump) ->
     F = fun() -> gen_server:call(RemotePid, Msg, infinity) end,
     Info = #{task => send_dump_to_remote_node,
              remote_pid => RemotePid, count => length(OurDump)},
-    kiss_long:run_safely(Info, F).
+    cets_long:run_safely(Info, F).
 
 %% Only the node that owns the data could update/remove the data.
 %% Ideally Key should contain inserter node info (for cleaning).
@@ -153,7 +153,7 @@ init({Tab, Opts}) ->
     MonTab = list_to_atom(atom_to_list(Tab) ++ "_mon"),
     ets:new(Tab, [ordered_set, named_table, public]),
     ets:new(MonTab, [public, named_table]),
-    kiss_mon_cleaner:start_link(MonTab, MonTab),
+    cets_mon_cleaner:start_link(MonTab, MonTab),
     {ok, #{tab => Tab, mon_tab => MonTab,
            other_servers => [], opts => Opts, backlog => [],
            paused => false, pause_monitor => undefined}}.
@@ -356,7 +356,7 @@ short_call(RemotePid, Msg) when is_pid(RemotePid) ->
     F = fun() -> gen_server:call(RemotePid, Msg, infinity) end,
     Info = #{task => Msg,
              remote_pid => RemotePid, remote_node => node(RemotePid)},
-    kiss_long:run_safely(Info, F);
+    cets_long:run_safely(Info, F);
 short_call(Name, Msg) when is_atom(Name) ->
     short_call(whereis(Name), Msg).
 
@@ -383,7 +383,7 @@ call_user_handle_down(RemotePid, _State = #{tab := Tab, opts := Opts}) ->
             FF = fun() -> F(#{remote_pid => RemotePid, table => Tab}) end,
             Info = #{task => call_user_handle_down, table => Tab,
                      remote_pid => RemotePid, remote_node => node(RemotePid)},
-            kiss_long:run_safely(Info, FF);
+            cets_long:run_safely(Info, FF);
         _ ->
             ok
     end.
