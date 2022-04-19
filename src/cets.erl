@@ -79,7 +79,7 @@ send_dump_to_remote_node(RemotePid, NewPids, OurDump) ->
 
 %% Only the node that owns the data could update/remove the data.
 %% Ideally Key should contain inserter node info (for cleaning).
--spec insert(server(), tuple()) -> ok.
+-spec insert(server(), tuple() | list(tuple())) -> ok.
 insert(Server, Rec) ->
     {ok, Monitors} = gen_server:call(Server, {insert, Rec}),
     wait_for_updated(Monitors).
