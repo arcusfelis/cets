@@ -336,6 +336,7 @@ wait_for_updated2(Mon, Servers) ->
         {updated, Mon, Pid} ->
             Servers2 = lists:delete(Pid, Servers),
             wait_for_updated2(Mon, Servers2);
+        %% What happens if the main server dies?
         {remote_down, Mon, Pid} ->
             Servers2 = lists:delete(Pid, Servers),
             wait_for_updated2(Mon, Servers2)
