@@ -123,7 +123,7 @@ other_nodes(Server) ->
 
 -spec other_pids(server()) -> [pid()].
 other_pids(Server) ->
-    servers_to_pids(other_servers(Server)).
+    other_servers(Server).
 
 -spec pause(server()) -> term().
 pause(Server) ->
@@ -167,7 +167,7 @@ handle_call({delete, Keys}, From, State = #{paused := false}) ->
 handle_call(other_servers, _From, State = #{other_servers := Servers}) ->
     {reply, Servers, State};
 handle_call(sync, _From, State = #{other_servers := Servers}) ->
-    [ping(Pid) || Pid <- servers_to_pids(Servers)],
+    [ping(Pid) || Pid <- Servers],
     {reply, ok, State};
 handle_call(ping, _From, State) ->
     {reply, ping, State};
@@ -278,9 +278,6 @@ add_servers2([], _Servers) ->
 
 pids_to_nodes(Pids) ->
     lists:map(fun node/1, Pids).
-
-servers_to_pids(Servers) ->
-    [Pid || Pid <- Servers].
 
 has_remote_pid(RemotePid, Servers) ->
     lists:member(RemotePid, Servers).
