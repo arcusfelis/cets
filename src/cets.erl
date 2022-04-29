@@ -187,7 +187,9 @@ handle_call(unpause, _From, State) ->
 handle_call(get_info, _From, State) ->
     handle_get_info(State);
 handle_call(Msg, From, State = #{paused := true, backlog := Backlog}) ->
-    case should_backlogged(Msg) of
+    %% Backlog is a list of pending operation, when our server is paused.
+    %% The list would be applied, once our server is unpaused.
+    case should_backlog(Msg) of
         true ->
             {noreply, State#{backlog := [{Msg, From} | Backlog]}};
         false ->
@@ -259,6 +261,7 @@ notify_remote_down_loop(RemotePid, [{Mon, Pid}|List]) ->
 notify_remote_down_loop(_RemotePid, []) ->
     ok.
 
+%% Merge two lists of pids, create the missing monitors.
 add_servers(Pids, Servers) ->
     lists:sort(add_servers2(Pids, Servers) ++ Servers).
 
@@ -322,6 +325,8 @@ replicate2([RemotePid | Servers], Msg) ->
 replicate2([], _Msg) ->
     ok.
 
+%% Wait for response from the remote nodes that the operation is completed.
+%% remote_down is sent by the local server, if the remote server is down.
 wait_for_updated({Mon, Servers, MonTab}) ->
     try
         wait_for_updated2(Mon, Servers)
@@ -337,6 +342,8 @@ wait_for_updated2(Mon, Servers) ->
             Servers2 = lists:delete(Pid, Servers),
             wait_for_updated2(Mon, Servers2);
         %% What happens if the main server dies?
+        %% Technically, we could add a monitor, so we detect that case.
+        %% But if the server dies, we should stop the node anyway.
         {remote_down, Mon, Pid} ->
             Servers2 = lists:delete(Pid, Servers),
             wait_for_updated2(Mon, Servers2)
@@ -386,6 +393,6 @@ call_user_handle_down(RemotePid, _State = #{tab := Tab, opts := Opts}) ->
             ok
     end.
 
-should_backlogged({insert, _}) -> true;
-should_backlogged({delete, _}) -> true;
-should_backlogged(_) -> false.
+should_backlog({insert, _}) -> true;
+should_backlog({delete, _}) -> true;
+should_backlog(_) -> false.
