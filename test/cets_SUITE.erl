@@ -43,11 +43,11 @@ test_multinode(Config) ->
     insert(Node2, Tab, {b}),
     insert(Node3, Tab, {c}),
     insert(Node4, Tab, {d}),
-    [{a},{c}] = dump(Node1, Tab),
-    [{b},{d}] = dump(Node2, Tab),
+    [{a}, {c}] = dump(Node1, Tab),
+    [{b}, {d}] = dump(Node2, Tab),
     ok = join(Node1, Tab, Pid2, Pid1),
-    [{a},{b},{c},{d}] = dump(Node1, Tab),
-    [{a},{b},{c},{d}] = dump(Node2, Tab),
+    [{a}, {b}, {c}, {d}] = dump(Node1, Tab),
+    [{a}, {b}, {c}, {d}] = dump(Node2, Tab),
     insert(Node1, Tab, {f}),
     insert(Node4, Tab, {e}),
     Same = fun(X) ->
@@ -56,16 +56,16 @@ test_multinode(Config) ->
                X = dump(Node3, Tab),
                X = dump(Node4, Tab)
            end,
-    Same([{a},{b},{c},{d},{e},{f}]),
+    Same([{a}, {b}, {c}, {d}, {e}, {f}]),
     delete(Node1, Tab, e),
-    Same([{a},{b},{c},{d},{f}]),
+    Same([{a}, {b}, {c}, {d}, {f}]),
     delete(Node4, Tab, a),
-    Same([{b},{c},{d},{f}]),
+    Same([{b}, {c}, {d}, {f}]),
     %% Bulk operations are supported
-    insert_many(Node4, Tab, [{m},{a},{n},{y}]),
-    Same([{a},{b},{c},{d},{f},{m},{n},{y}]),
+    insert_many(Node4, Tab, [{m}, {a}, {n}, {y}]),
+    Same([{a}, {b}, {c}, {d}, {f}, {m}, {n}, {y}]),
     delete_many(Node4, Tab, [a,n]),
-    Same([{b},{c},{d},{f},{m},{y}]),
+    Same([{b}, {c}, {d}, {f}, {m}, {y}]),
     ok.
 
 node_list_is_correct(Config) ->
